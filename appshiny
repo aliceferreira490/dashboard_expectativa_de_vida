@@ -1,0 +1,1036 @@
+#--------------------------------- Pacotes ---------------------------------
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(forcats)
+library(ggplot2)
+library(corrplot)
+library(plotly)
+library(faraway)
+library(ggplot2)
+library(dplyr)
+library(nortest)
+require(maps)
+require(viridis)
+library(car)
+theme_set(theme_gray())
+
+#--------------------------- Limpeza do Banco de dados ----------------------------
+
+
+dados <- read_csv("Life_Expectancy_Data.csv")
+
+
+# no momento desejamos oservar apenas os paises que tem dadaos de 2000 ate 2015
+# vamos tirar os que possuem menos de 16 valores
+
+length(table(dados$Country)[table(dados$Country)!=16])
+# 10 paises que possuem dados de somente um ano
+
+names(table(dados$Country)[table(dados$Country)!=16])
+# nomes dos paises a serem retirados
+
+dados = dados %>% filter( Country != "Cook Islands", Country != "Dominica", Country != "Marshall Islands",
+                          Country != "Monaco" , Country != "Nauru", Country != "Niue" , Country != "Tuvalu",
+                          Country !="Palau", Country !="Saint Kitts and Nevis", Country !="San Marino")
+
+length(table(dados$Country)[table(dados$Country)!=16])
+# ok
+
+
+table(dados$Year)
+# 183 paises
+
+# transformar variaveis categoricas em factor
+dados$Country = as.factor(dados$Country)
+dados$Status = as.factor(dados$Status)
+
+nome_varcontinuas = colnames(dados)[-c(1,3,4)]
+nome_varcontinuas
+
+# observar se ha alguma anormalidade nos dados, por exemplo porcentagens sem sentido 
+# ou valores que nao encaixem em categorias
+summary(dados)
+
+# no geral parece ok, porem contem quantidade grande de NA's devido a falta de 
+# acessibilidade de informacao em alguns paises
+
+# infelizmente como criei essa analise em 3 dias nao vou consuir fazer uma limpeza adequada
+
+
+# --------------------------- Escala de cores --------------------
+
+col = colorRampPalette(c("#F7FE2E", "#D358F7", "#5F04B4"))
+col2 = colorRampPalette(c("#F7FE2E", "#A901DB","#5F04B4"))
+
+
+# ------------------ Texto -------------------
+
+texto2 = ("Atravez da regressao aplicada acima podemos perceber pelo teste T, localizado na ultima coluna,
+          que ha diversas variaveis que nao estao relacionadas fortmente com a expectativa de vida.
+          \
+          Temos um total de nove preditores que nao tem efeito na resposta, devido a isso criei um segundo
+          modelo deixando somente as variaveis significativas ao nivel de 5%. 
+          \n
+          Considerando a quantidade de variaveis retiradas no segundo modelo a reducao do R2 foi muito sutil,
+          nos levando a aderir-lo pela maior simplicidade.
+          Essa regressao ainda poderia ser muito melhorada, pois como podemos observar pelo treemap
+          ha muitos preditores que estao correlacionados, como a mortalidade infantil e e mortalidade
+          em pessoas com menos de 5 anos. Infelizmnete pela falta de tempo nao irei me aprofundar nas
+          possiveis transformacoes dessa regressao")
+
+
+
+# ------------------ Espaco de testes estatisticos e regressao ----------------------
+
+# testes estat
+
+normalidade_anos = ad.test(dados$Year)
+normalidade_anos2 = ad.test(dados$Year)
+normalidade_anos3 = ad.test(dados$Year)
+
+normalidade_escolaridade  = ad.test(dados$Schooling)
+normalidade_HIV = ad.test(dados$`HIV/AIDS`)
+normalidade_saude = ad.test(dados$`percentage expenditure`)
+
+teste1 = cor.test(dados$Year, dados$Schooling, method = "pearson")
+teste2 = cor.test(dados$Year, dados$`HIV/AIDS`, method = "pearson")
+teste3 = cor.test(dados$Year, dados$`percentage expenditure`)
+
+
+# regressao
+
+modelo_completo = lm(`Life expectancy` ~ `Adult Mortality` + `infant deaths`+ `Alcohol`+
+                         `percentage expenditure` + `Hepatitis B` + `Measles` + `BMI` + 
+                         `under-five deaths` + `Polio` + `Total expenditure`+ `Diphtheria` +
+                         `HIV/AIDS` + `GDP` + `Population` + `thinness  1-19 years` + `thinness 5-9 years` +
+                         `Schooling` +`Income composition of resources`, data = dados)
+
+resuminho_completo = sumary(modelo_completo)
+
+
+modelo_menor = lm(`Life expectancy` ~ `Adult Mortality` + `infant deaths`+
+                      `percentage expenditure` +  `BMI` +
+                      `under-five deaths` +  `Diphtheria` + `HIV/AIDS` + 
+                      `Income composition of resources` + `Schooling`, data = dados)
+
+resuminho_menor = sumary(modelo_menor)
+
+#----------------- Suposicao da regressao -------------------
+
+# Residuos independentemente distribuidos em torno de 0
+plot(modelo_menor$fitted.values, modelo_menor$residuals) 
+abline(h=0, col="red", lty= 3) 
+# nao ficou mt bom, mas devido a falta de tempo vou deixar passar
+
+# Normalidade dos residuos
+qqPlot(modelo_menor$residuals)
+modelo_menor$residuals %>% shapiro.test() # Rejeita a hipotese de normalidade
+
+
+
+#----------------- Criando mapa ------------------#
+
+mapa_central = function(ano){
+    dadosmapa = dados
+    dadosmapa = dadosmapa %>% filter( Country != "Cook Islands", Country != "Dominica", Country != "Marshall Islands",
+                                      Country != "Monaco" , Country != "Nauru", Country != "Niue" , Country != "Tuvalu",
+                                      Country !="Palau", Country !="Saint Kitts and Nevis", Country !="San Marino")
+    
+    dadosmapa$Country = as.factor(dadosmapa$Country)
+    dadosmapa$Status = as.factor(dadosmapa$Status)
+    paises_foco = as.vector(levels(dadosmapa$Country))
+    mapa_paises_foco = map_data("world", region = paises_foco)
+    
+    
+    region.lab.data <- mapa_paises_foco %>%
+        group_by(region) %>%
+        summarise(long = mean(long), lat = mean(lat))
+    
+    
+    # valores da expectativa de vida em 2015
+    # criei data frame pra fazer referencia da expectativa de vida com pais
+    valores_2015 = as.data.frame(dadosmapa[dadosmapa$Year== ano, c(1,4)])
+    valores_2015$Country = as.factor(valores_2015$Country)
+    
+    # nomes dos paises, porem eles nao estao na mesma ordem que o arquivo valores_2015, 
+    # pois no arquivo que plota o mapa temos muitas repeticoes dos paises
+    nomes = names(table(mapa_paises_foco$region))
+    valor = NULL
+    
+    
+    # criando um vetor cujo relaciona os paises de nomes com os valores da expectativa de vida
+    # pois no arquivo a ser plotado no grafico ha inumeras repiticoes de cada pais
+    
+    for(i in 1:160){
+        pais = nomes[i]
+        
+        for (j in 1:183){
+            if(pais == valores_2015$Country[j]){ valor[i] = valores_2015$`Life expectancy`[j]}
+        }
+    }
+    
+    # agora temos a quantidade de repeticoes tirada do table
+    repeticoes = (as.vector(table(mapa_paises_foco$region)))
+    
+    
+    # agora criamos um vetor com os numeros reperitindo a exata quantidade necessaria
+    a = rep(valor[1], repeticoes[1])
+    for (i in 2:160){
+        b = rep(valor[i], repeticoes[i])
+        
+        k = c(a,b)
+        a = k
+    }
+    
+    
+    length(k)
+    nrow(mapa_paises_foco)
+    # msm valor  Ok
+    
+    mapa_paises_foco$expectativa_vida = k
+    
+    mapa_plotando = ggplot(mapa_paises_foco, aes(x = long, y = lat)) +
+        geom_polygon( aes( group = group, fill = expectativa_vida), color = "#D8D8D8")+
+        scale_fill_viridis_c(option = "C")+
+        #  geom_text(aes(label = region), data = region.lab.data,  size = 2, hjust = 0.5, col = "grey")
+        labs(title = paste("Relacao da expectativa de vida no mundo em", ano),
+             fill = "Expectativa \n de vida (anos)")+
+        theme_void()+
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    return(mapa_plotando)
+}
+
+#mapa_central(2010)
+
+
+# --------------- Criando grafico com slider ------------
+
+
+grafico_tempo_nao= function(escolhido){
+    
+    id = numeric(22)
+    for (i in 1:22){id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)}
+    id = sum(id)
+    col = colorRampPalette(c("#F7FE2E", "#D358F7", "#5F04B4"))
+    
+    dados2 = function(a){
+        if(a == 8){ 
+            banco = dados[dados$`percentage expenditure` <= 150,]
+            return(banco)}
+        if(a != 8){return(dados)}
+    }
+    
+    dados2 = dados2(id)
+    dados2 = data.frame(dados2)
+    dados2 = data.frame(dados2[,c(id,4,2,3)])
+    colnames(dados2)[c(1,2,3,4)] = c("X", "Y","ano","status")
+    dados2$ano = as.factor(dados2$ano)
+    pontos_cor = nrow(dados2)
+    
+    grafico2 = ggplot(dados2, aes(X,Y)) +
+        geom_point(aes(frame = ano), size = 2, alpha = 0.7, col = col(pontos_cor))+
+        labs(title = paste("Evolucao temporal da expectativa de vida vs", escolhido),
+             y = "Expectativa de vida",
+             x = escolhido)+
+        theme_gray()+
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    grafico2 = ggplotly(grafico2) 
+    grafico2 = grafico2 %>% 
+        animation_opts(400, easing = "linear", redraw = FALSE)
+    
+    grafico2 = grafico2 %>%
+        animation_slider(currentvalue = list(prefix = "ANO ", font = list(color="#F7FE2E")))
+    
+    return(grafico2)
+}
+
+#grafico_tempo_nao("percentage expenditure")
+
+
+grafico_tempo_sim= function(escolhido, yesornou){
+    
+    id = numeric(22)
+    for (i in 1:22){id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)}
+    id = sum(id)
+    col = colorRampPalette(c("#F7FE2E", "#D358F7", "#5F04B4"))
+    
+    dados2 = function(a){
+        if(a == 8){ 
+            banco = dados[dados$`percentage expenditure` <= 150,]
+            return(banco)}
+        if(a != 8){return(dados)}
+    }
+    
+    dados2 = dados2(id)
+    dados2 = data.frame(dados2)
+    dados2 = data.frame(dados2[,c(id,4,2,3)])
+    colnames(dados2)[c(1,2,3,4)] = c("X", "Y","ano","status")
+    dados2$ano = as.factor(dados2$ano)
+    
+    
+    grafico2 = ggplot(dados2, aes(X,Y, col = status)) +
+        geom_point(aes(frame = ano), size = 2, alpha = 0.7)+
+        scale_color_manual(values = col(2))+
+        labs(title = paste("Evolucao temporal da expectativa de vida vs", escolhido),
+             y = "Expectativa de vida",
+             x = escolhido)+
+        theme_gray()+
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    
+    grafico2 = ggplotly(grafico2) 
+    grafico2 = grafico2 %>% 
+        animation_opts(400, easing = "linear", redraw = FALSE)
+    
+    grafico2 = grafico2 %>%
+        animation_slider(currentvalue = list(prefix = "ANO ", font = list(color="#F7FE2E")))
+    
+    return(grafico2)
+}
+
+#grafico_tempo_sim("percentage expenditure")
+
+
+grafico_tempo = function(x,y){
+    if(x == "sim"){return(grafico_tempo_sim(y))}
+    if(x == "nao"){return(grafico_tempo_nao(y))}
+}
+
+#grafico_tempo("sim", "Alcohol")
+
+
+#---------------- Criando graficos ------------
+
+
+grafico_boxplot = function(ano){
+    dados2 = data.frame(dados)
+    dados2 = as.vector(dados2[dados2$Year == ano,])
+    colnames(dados2)[4] = "expt_vida"
+    
+    alice = ggplot(dados2, aes(x = as.factor(Status), y = expt_vida))+
+        geom_boxplot(col = "#8904B1", fill = '#F4FA58')+
+        labs(title = paste('Relacao do desenvolvimento \n com a expectativa em', ano),
+             x = NULL, y = "Expectativa de vida",     ylab=c(40,90))+
+        theme_gray()+
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    return(alice)
+}
+
+#grafico_boxplot(2015)
+#(dados[dados$Year == 2010 & dados$Status == "Developed",1]) 
+
+
+cores<- colorRampPalette(c('#FE2E9A','#00BFFF'))
+
+grafico_histograma = function(escolhido, bins){
+    col <- colorRampPalette(c("#F7FE2E", "#D358F7", "#5F04B4"))
+    id = numeric(22)
+    
+    for (i in 1:22){
+        id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)
+    }
+    id = sum(id)
+    
+    dados2 = data.frame(dados)
+    dados2 = data.frame(dados2[,id])
+    colnames(dados2)[1] = "uhu"
+    
+    bora = ggplot(dados2, aes(x = uhu))+
+        geom_histogram(bins = bins, col = 'white', fill = col(bins))+
+        labs(title = paste('Histogram for',escolhido), x = escolhido, y = 'Count')+
+        theme_gray()+
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    return(bora)
+}
+
+#grafico_histograma("thinness  1-19 years",30)
+
+
+
+grafico_dispersao = function(escolhido){
+    col <- colorRampPalette(c( "#5F04B4", "#F7FE2E"))
+    id = numeric(22)
+    
+    for (i in 1:22){
+        id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)
+    }
+    id = sum(id)
+    
+    dados2 = data.frame(dados)
+    dados2 = data.frame(dados2[,c(id,4,3)])
+    colnames(dados2)[c(1,2,3)] = c("uhux", "uhuy","uhuz")
+    dados2$uhuz = as.factor(dados2$uhuz)
+    
+    
+    boraquebora = ggplot(dados2, aes(x = uhux, y = uhuy, color = uhuz))+
+        geom_point()+
+        scale_color_manual(values = col(2))+
+        labs(title = paste("Relacao entre", escolhido, "e a expectativa de vida"),
+             y = "Expectativa de vida", x = escolhido, color = "Status")+
+        theme(plot.title = element_text(hjust = 0.5))+
+        theme_gray()+
+        geom_smooth(method = "lm", col = "black")
+    
+    return(boraquebora)
+}
+
+#grafico_dispersao("thinness  1-19 years")
+
+
+grafico_arvora= function(){
+    dados2 = dados
+    colnames(dados2)[c(21,8)] = c("ICR","Gastos saude")
+    col <- colorRampPalette(c("#F7FE2E", "#D358F7", "#5F04B4"))
+    
+    corrplot( cor(dados2[,-c(1,2,3,7,9,10,13,14,17,18,19,20)], use = "complete.obs"), tl.srt=45,
+              type="upper", method="circle", col = col(200),
+              tl.col="black")
+}
+#grafico_arvora(a)
+
+
+
+grafico_histograma_colunas = function(a){grafico_histograma(a,20)}
+
+
+
+grafico_boxplot_colunas = function(escolhido){
+    id = numeric(22)
+    for (i in 1:22){id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)}
+    
+    id = sum(id)
+    colnames(dados)[id] = c("uhuy")
+    
+    a = ggplot(dados, aes(y = uhuy))+
+        geom_boxplot(col = "#8904B1", fill = '#F4FA58')+
+        labs(title = paste('Box-plot para', escolhido),
+             x = escolhido, y = NULL)+
+        theme_gray()+
+        theme(plot.title = element_text(hjust = 0.5))
+    return(a)
+}
+
+
+#grafico_boxplot_colunas("BMI")
+
+grafico_boxplot_colunas_ano = function(escolhido){
+    id = numeric(22)
+    for (i in 1:22){
+        id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)
+    }
+    id = sum(id)
+    colnames(dados)[id] = c("uhuy")
+    
+    a = ggplot(dados, aes(y = uhuy, x = as.factor(Year)))+
+        geom_boxplot(fill = col(16))+
+        labs(title = paste('Box-plot para', escolhido, "por ano"),
+             x = "Ano", y = escolhido)+
+        theme_gray()+
+        theme(plot.title = element_text(hjust = 0.5))
+    return(a)
+}
+
+#grafico_boxplot_colunas_ano("GDP")
+
+#dados$`Life expectancy`
+
+grafico_reta_colunas = function(escolhido,ano){
+    id = numeric(22)
+    for (i in 1:22){
+        id[i] = ifelse(escolhido == colnames(dados)[i], i, 0)
+    }
+    id = sum(id)
+    
+    dados2 = dados[dados$Year==ano,]
+    colnames(dados2)[id] = c("uhux")
+    
+    a = ggplot(dados2, aes(y = `Life expectancy`, x = uhux, group = as.factor(Status)))+
+        geom_line(aes(color=as.factor(Status)), lwd = 0.5)+
+        geom_point(aes(color=as.factor(Status)))+
+        scale_color_manual(values = col(2))+
+        labs(title = paste('Exepectativa de vida versus', escolhido, "em", ano),
+             x = escolhido, y = "Expectativa de vida",
+             color = "Status:")+
+        theme_gray()+
+        theme(legend.position="bottom")+
+        theme(plot.title = element_text(hjust = 0.5))
+    return(a)
+}
+
+# ----------------- Grafico respostas temporais ----------
+
+
+A_temporal = ggplot(dados, aes(as.factor(Year), Schooling))+
+    geom_boxplot(fill = col2(16))+
+    labs(x = "Ano", y = "Escolaridade", 
+         title = "Avanco da escolaridade atravez dos anos")+
+    theme(plot.title = element_text(hjust = 0.5))
+
+#A_temporal
+
+
+
+B_temporal = ggplot(dados, aes(y =`HIV/AIDS`, x = as.factor(Year), fill = as.factor(Year)))+
+    geom_col()+
+    scale_fill_manual(values = col(16))+
+    guides(fill=FALSE)+
+    labs(x = "Ano", 
+         title = "Retrocesso do HIV/AIDS atravez dos anos")+
+    theme(plot.title = element_text(hjust = 0.5))
+
+#B_temporal
+
+
+
+
+C_temporal = ggplot(dados, aes(x = as.factor(Year), y = `percentage expenditure`, fill = as.factor(Year)))+
+    geom_col()+
+    scale_fill_manual(values = col(16))+
+    guides(fill=FALSE)+
+    labs(x = "Ano", 
+         title = "Investimento na saude atravez dos anos")+
+    theme(plot.title = element_text(hjust = 0.5))
+
+#C_temporal
+
+
+
+# ----------------- caixas valores ---------------
+
+
+valor_caixas_colunas = function(variavel, estimativa){
+    a = numeric(22)
+    for (i in 1:22) { a[i] = ifelse(colnames(dados)[i] == variavel, i, 0)}
+    a = sum(a)
+    coluna = dados[,a]
+    colnames(coluna)[1]="teste"
+    
+    valor1 = ifelse(estimativa == 100, sd(coluna$teste, na.rm = T), 
+                    summary(coluna$teste)[estimativa])
+    valor1 = round(valor1, 1)
+    return(valor1)
+}
+
+#valor_caixas_colunas("Population", 100)
+
+
+# ------------------ Shiny ----------------------
+
+## ui.R ##
+
+
+sidebar <- dashboardSidebar(
+    sidebarMenu(
+        menuItem("Analise Geral", tabName = "geral", icon = icon("heartbeat")),
+        menuItem("Analise das variaveis", tabName = "perg_3", icon = icon("search")),
+        menuItem("Efeitos temporais",  tabName = "perg_2", icon = icon("history")),
+        menuItem("Regressao",  tabName = "perg_1", icon = icon("chart-bar"))
+    )
+)
+
+
+
+body <- dashboardBody(
+    
+    tabItems(
+        
+        #introducao
+        tabItem(tabName = "geral",
+                fluidRow(
+                    box(status = "danger", width = 2, background = "aqua", height =  124,
+                        selectInput(inputId = "ano_escolhido", label = "Selecione um ano: \n  ",
+                                    choices = 2000:2015, selected = 2015)
+                    ),
+                    
+                    valueBoxOutput(width = 2, outputId ="media_expectativa"),
+                    valueBoxOutput(width = 2, outputId ="media_IMC"),
+                    valueBoxOutput(width = 2, outputId ="media_mortalidade_infantil"),
+                    valueBoxOutput(width = 2, outputId ="media_gasto_na_saude"),
+                    valueBoxOutput(width = 2, outputId ="media_escolaridade")
+                ),
+                
+                
+                
+                fluidRow(
+                    box(width = 8, 
+                        title = "Mapa mundial da expectativa de vida", status = "primary", solidHeader = TRUE,
+                        collapsible = TRUE,
+                        plotOutput("plot1", height = 300)
+                    ),
+                    
+                    box(width = 4,
+                        title = "Relacao de desenvolvimento",status = "primary", solidHeader = TRUE,
+                        collapsible = TRUE,
+                        plotOutput("plot2", height = 300))
+                ),
+                
+                h2("Perguntas ao Dataset!"),
+                
+                fluidRow(
+                    box(status = "primary",
+                        solidHeader = F,
+                        collapsible = F,
+                        width = 12,
+                        
+                        fluidRow(column(width = 10, background = "purple",
+                                        "  A expectativa de vida e uma das taxas mais observadas no mundo, pois a apartir dela podemos tirar
+                                        diversas conclusoes sobre o pais em foco. Os dados foram coletados sao do site da OMS e das Nacoes Unidas, e retirados por mim diretamente do kaggle.",
+                                        br(),br(),
+                                        "Ele possui um total de 22 variaveis sobre 193 paises, nos anos de  2000 ate 2015, ha alguns casos cujo 
+                                        pais possuia dados de somente um ano, mas eles foram retirados previamente. Tambem vale ressaltar que ha 
+                                        alguns valores faltantes ao longo do caminho, isso ocorre pela falta de acesso a informcao de certas 
+                                        localizacoes.", br(),br(),
+                                        "Agora nos basta criar hipoteses sobre a relacao da taxa de mortalidade com as demais variaveis, para isso 
+                                        deixei ao lado um fluxo de algumas perguntas pertinentes."
+                        ),
+                        
+                        column(width = 2, align = "center",
+                               img(src="https://i.pinimg.com/236x/2d/9c/5f/2d9c5f0e8f3a7af22fabb11f9a659ef7.jpg", width=150))))),
+                
+                
+                fluidRow( 
+                    box( width = 6, background = "purple",status = "primary",
+                         title = "Pergunta 1)", 
+                         h4("A escolaridade mundial tende a crescer ao decorrer do tempo?")),
+                    
+                    box(title = "Pergunta 2)",width = 6, background = "purple",status = "primary",
+                        h4("O numero de individuos com HIV/AIDS reduziu ao passar dos anos?"))),
+                
+                fluidRow(
+                    box(width = 6, background = "purple", title = "Pergunta 3)", solidHeader = F, status = "primary",
+                        h4("O investimento mundial na saude tende a crescer?")),
+                    box(title = "Pergunta 4)",width = 6, background = "orange", solidHeader = F, status = "warning",
+                        h4("Todas as variaveis sao relevantes para a expectativa de vida?"))
+                )),
+        
+        
+        
+        
+        #pergunta 1
+        tabItem(tabName = "perg_1",
+                h2("Todas as variaveis sao de fato relevantes para calcular a expectativa de vida?"),
+                
+                fluidRow(
+                    box(width = 3, title = "Inputs", height = 300, solidHeader = TRUE, status = "primary",
+                        
+                        selectInput(inputId = "var_cont", label = "Selecione uma variavel: \n  ",
+                                    choices = nome_varcontinuas, selected = "Income composition of resources"),
+                        
+                        sliderInput("slider", "Numero de barras do histograma:", 1, 100, 50)),
+                    
+                    box(width = 9, solidHeader = T, background = "purple",height = 300, status = "warning",
+                        tabBox( width = 12,
+                                tabPanel("Grafico de pontos", plotOutput("pontos", height = 210)),
+                                tabPanel("Histograma", plotOutput("hist", height = 210))
+                        ))),
+                
+                fluidRow(
+                    box(title = "Resumo da regressao", height = 500, width = 7, status = "warning", 
+                        solidHeader = TRUE,
+                        verbatimTextOutput("resumo_reg")),
+                    
+                    box(width = 5, height = 500, title = "Correlacao das variaveis", status = "primary", solidHeader = TRUE,
+                        plotOutput("treemap"))),
+                
+                
+                h2("Resposta: nao!"),
+                fluidRow(
+                    box(width = 8, title = "Analise da regressao",status = "primary", solidHeader = TRUE,
+                        textOutput("texto_2")),
+                    valueBoxOutput(width = 2, outputId ="R2_antes"),
+                    valueBoxOutput(width = 2, outputId ="R2_depois"))
+        ),
+        
+        
+        
+        
+        
+        
+        tabItem(tabName = "perg_2",
+                h2("Quais os princiapis efeitos temporais no Dataset?"),
+                
+                fluidRow(
+                    box(width = 3, title = "Inputs", height = 300, background = "purple", 
+                        solidHeader = F, status = "primary",
+                        selectInput(inputId = "var_cont_2", label = "Selecione uma variavel: \n  ",
+                                    choices = nome_varcontinuas, selected = "Schooling"),
+                        radioButtons(inputId = "decisao", "Separar cor por Status:",
+                                     c("Sim" = "sim",
+                                       "Nao" = "nao"))),
+                    box(width = 9, height = 300, solidHeader = F, status = "primary",
+                        plotlyOutput("grafico_interativo", height = 250))
+                ),
+                
+                fluidRow( box(width = 12, solidHeader = TRUE,
+                              " - O principal objetivo desse dataset e o estudo da expectativa de vida apartir das demais variaveis
+            , porem a analise temporal desses preditores nos passam informacoes muito interresantes! Pois 
+            podemos ver de perto a evolucao global ao passar do tempo, gerando conslusoes pertinentes.", br(),br(),
+                              
+                              " - Atravez do grafico interativo acima percebi o comportamento em especial das seguintes
+               variaveis: escolaridade (Schooling), IMC(BMI), e Investimento percentual na saude (percentage expenditure).
+               Nos levando as hipoteses abaixo. Para obermos uma resposta em funcao do tempo iremos fazer analises graficas e testes estatsitiscos
+              simples, vale ressaltar que nesse caso podemos usar uma abordagem parametrica devido ao tamanho do banco de dados",
+                              br(),br(),
+                              " - Antes de partirmos para as proximas analises sugiro que deem play nas variaveis que vamos analisar."),
+                          
+                ), 
+                
+                
+                
+                fluidRow(column( width = 4,
+                                 box(title = "A) A escolaridade mundial tende a crescer ao decorrer do tempo?",
+                                     width = NULL, status = "warning",solidHeader = TRUE, background = "orange")),
+                         
+                         column( width = 4,
+                                 box(title = " B) O numero de individuos com HIV/AIDS reduziu ao passar dos anos?",
+                                     width = NULL, status = "primary", background = "blue")), 
+                         
+                         column( width = 4,
+                                 box(title = "C) O investimento mundial na saude tende a crescer?",
+                                     width = NULL, status = "warning",solidHeader = TRUE,background = "orange"))
+                ),
+                
+                
+                fluidRow( box(width = 12, solidHeader = T, 
+                              tabBox(type = "tabs", width = 12,
+                                     
+                                     tabPanel("Letra A)", br(),
+                                              h3("Analises do grafico temporal"),
+                                              "- Atravez do grafico temporal acima fica evidente a movimentacao de pontos para direita e uma
+                                          certa tendencia geral de acumulo nesse local. Ou seja, ao passar do tempo a escolaridade, anos passados na escola,
+                                          caminham para cima e de maneira razoavelmente conjunta, possuindo menos outliers.
+                                        ", br(),
+                                              
+                                              "- Aliado a isso tambem vale ressaltar o traco de uma reta crescente que interliga a
+                                          expectativa de vida e a escolaridade! O que se era de se esperar, pois
+                                          normalmente a educacao e saude andam de mao dadas.",
+                                              
+                                              br(),
+                                              
+                                              "- Outro fator interresente sao a aconcetracao de paises desenvolvidos em amarelo no canto supeior 
+                                          direito.",
+                                              br(), br(),br(),
+                                              
+                                              fluidRow(
+                                                  box(plotOutput("temporal_letra_a", height = 250), width = 7, height = 250),
+                                                  box(width = 5, height = 250,
+                                                      "O grafico ao lado mostra uma sequencia de boxplots referentes a escolaridade ao longo do tempo,
+                                                  com ele podemos provar que a mediana esta de fato crescente.", br(), br(),
+                                                      "Outro fator analisado e a reducao do espaco interquatilico, ressaltando nossa hipotese da reducao de 
+                                                  desigualdade no mundo.", br(), br(),
+                                                      "Agora iremos aplicar testes para essas hipoteses, como o teste de aderencia (Anderson-Darling, pois
+                                                  temos uma amostra grande) 
+                                                  indicaram normalidade vamos aplicar o teste de correlacao de Spearman."
+                                                      
+                                                  )
+                                              ),
+                                              
+                                              br(),
+                                              br(),
+                                              h3("Testes aplicados"),
+                                              fluidRow(column(title = "Teste de nomalidade de anos",status = "warning", width = 6,solidHeader = T,
+                                                              verbatimTextOutput("teste_normalidade_anos"),
+                                                              verbatimTextOutput("teste_normalidade_escolaridade")), 
+                                                       
+                                                       column(title = "Teste de correlacao de Pearson",width = 6, solidHeader = T,
+                                                              status = "warning", 
+                                                              verbatimTextOutput("teste_entre_escolaridade_e_anos"))),
+                                              br(),
+                                              h3("Resposta: sim!"),
+                                              "Como p-valor do teste de Correlacao de Spearman deu inferior ao nivel de siginificancia escolhido, 5%,
+                                          podemos confirmar que o fator tempo influencia diretamente no fator escolaridade!
+                                          Alem disso, o intervalo de confianca para o estimador de correlacao se mantem postivo a todo momento. Isso
+                                          quer dizer que a correlacao e de fato positiva como suposto acima, pois a probabilidade desse valor estar entre
+                                          [0.1774187 , 0.2485468]  e de 95%."
+                                     ),
+                                     
+                                     
+                                     
+                                     
+                                     tabPanel("Letra B)", 
+                                              
+                                              br(),
+                                              h3("Analises do grafico temporal"),
+                                              "- Atravez do grafico temporal podemos observar um comportamento curioso dos pontos ao longo do tempo, tendo tendencias de concentrar a
+                                          esquerda. Isso quer dizer que o numero de mortes por HIV e AIDS (a cada mil pessoas) esta reduzindo, 
+                                          o que era de se esperar pois a campanha contra essas doencas se espalhou em massa no decorrer do tempo.", br(), br(),
+                                              
+                                              "- Quanto a relacao do HIV/AIDS com a expectativa de vida nao podemos ver um comportamento evidente no grafico. Isso porque o numero da
+                                           variavel do HIV sempre se manteve muito baixo e concentrado, as vezes pela falta de morte ou ainda pela dificuldade de coleta da informacao.
+                                          Mas ainda que nao temos uma conclusao atravez desse graficos iremos analisar se essa variavel e explicactiva para o calculo da
+                                          expectativa de vida.",
+                                              br(), br(),br(),
+                                              
+                                              
+                                              fluidRow(
+                                                  box( width = 7, height = 250, plotOutput("temporal_letra_b", height = 250)),
+                                                  box(width = 5, height = 250,
+                                                      "O grafico ao lado mostra claramente o comportamento do numero de mortes por HIV e AIDS reduzindo ao longo dos anos
+                                                  assim como suposto acima.", br(), br(),
+                                                      "Agora iremos aplicar novamente os testes para essas hipoteses, devemos ter atencao ao teste de normalidade da variavel
+                                                   HIV e AIDS pois eles possuem uma concentracao muito grande no zero, o que levaria a nao aderencia. Aplicamos o teste 
+                                                   Anderson-Darling, e como temos uma amostra grande ele indicou de fato a normalidade."
+                                                  )
+                                              ),
+                                              
+                                              br(),
+                                              br(),
+                                              
+                                              h3("Testes aplicados"),
+                                              fluidRow(column(title = "Teste de nomalidade de anos",status = "warning", width = 6,solidHeader = T,
+                                                              verbatimTextOutput("teste_normalidade_anos2"),
+                                                              verbatimTextOutput("teste_normalidade_HIV")), 
+                                                       
+                                                       column(title = "Teste de correlacao de Pearson",width = 6, solidHeader = T,
+                                                              status = "warning", 
+                                                              verbatimTextOutput("teste_entre_HIV_e_anos"))),
+                                              br(),
+                                              h3("Resposta: sim!"),
+                                              "Como p-valor do teste de Correlacao de Spearman deu inferior ao nivel de siginificancia escolhido, 5%,
+                                          podemos confirmar nossa hipotese! De fato, o ano esta correlacionado com a variavel que indica o numero de 
+                                          mortes por HIV e AIDS.",
+                                              br(),br(),
+                                              "Porem isso nao confirma que de fato elas estao relacionadas de maneira  proporcional ou inversamente  proporcinal,
+                                          isso e confirmado atravez do invervalo de confinca do estimador. Como nosso IC foi negativo tanto no limite superior
+                                          como inferior podemos afirmar com 95% de certeza que de fato e negativo. Assim confirmamos que estao relacionadas de maneira
+                                          inversamente proporcional, assim quanto mais os anos passam menor sera o valor de mortes por HIV e AIDS."
+                                     ),
+                                     
+                                     
+                                     tabPanel("Letra C)",
+                                              br(),
+                                              h3("Analises do grafico temporal"),
+                                              "- A variavel 'percentage expenditure' nos retorna a porcentagem do PIB anual gasto em saude, o que e pertinente pois
+                                          os valores brutos nao seriam tao informativos devido a desigualdade financeira.
+                                           Atravez do grafico temporal nao fica claro um padrao geral, principalmente devido a alguns
+                                          outliers destacantes, mas ao aplicar o (zoom disponnivel no topo direito) continuamos sem ver um padrao claro.", 
+                                              br(), br(),
+                                              
+                                              "- Essa hipotese foi baseada na ideia geral de que com o avanco tecnologico e a crescente implementacao de pautas sociais
+                                          no ambito politico, os gastos com a saude tenderiam a crescer tambem, porem devemos nos
+                                          questionar se essa e de fato a realidade, ou no caso, a realidade no nosso banco de dados. Afinal,
+                                          ele abrange apenas os anos de 2000 ate 2015, sera que o gasto com saude aumentou sigificativamente nesses anos?
+                                          Ou sera que diminuiu?",
+                                              br(), br(),br(),
+                                              
+                                              
+                                              fluidRow(
+                                                  box( width = 7, height = 250, plotOutput("temporal_letra_c", height = 250)),
+                                                  box(width = 5, height = 250,
+                                                      "O grafico ao lado mostra que comportamento do investimento na ao longo dos anos nao teve um padrao exato,
+                                                  de fato ele creceu em especial apartir de 2004, mas sera que de maneira siginificativa?", br(), br(),
+                                                      "Agora iremos aplicar novamente os testes para essa hipotese, comecando pela normalidade dos anos e do invetimento
+                                                  e em seguida partindo o teste de correlacao de Pearson."
+                                                  )), br(), br(),
+                                              
+                                              
+                                              h3("Testes aplicados"),
+                                              fluidRow(column(title = "Teste de nomalidade",status = "warning", width = 6,solidHeader = T,
+                                                              verbatimTextOutput("teste_normalidade_anos3"),
+                                                              verbatimTextOutput("teste_normalidade_saude")), 
+                                                       
+                                                       column(title = "Teste de correlacao de Pearson",width = 6, solidHeader = T,
+                                                              status = "warning", 
+                                                              verbatimTextOutput("teste_entre_saude_e_anos"))),br(),
+                                              h3("Resposta: nao!"),
+                                              "Como p-valor do teste de Pearson deu igual a 0.07667, maior que o nivel de confianca
+                                           estabelecido de 5%, nao podemos rejeitar a Ho: as variaveis nao estao correlacionadas.
+                                           Entao o passar dos anos nao influencia no gasto com a saude. Isso tambe pode ser confirmado
+                                          com o IC, pois seu limite inferior esta abaixo de zero e o limite superior acima, entao nao podemos
+                                           confirmar com 95% de certeza que ele nao e zero."
+                                              
+                                     )
+                              )))),
+        
+        
+        
+        
+        tabItem(tabName = "perg_3",
+                h2("Analises das variaveis"),
+                
+                column(width = 2,
+                       fluidRow(
+                           box(width = NULL, height = 100, background = "purple", 
+                               solidHeader = F, status = "primary",
+                               selectInput(inputId = "var_cont_3", label = "Selecione uma variavel: \n  ",
+                                           choices = nome_varcontinuas, selected = "Schooling")),
+                       ),
+                       fluidRow(valueBoxOutput(width = NULL, outputId ="qua1_colunas")),
+                       fluidRow(valueBoxOutput(width = NULL, outputId ="media_colunas")),
+                       fluidRow(valueBoxOutput(width = NULL, outputId ="mediana_colunas")),
+                       fluidRow(valueBoxOutput(width = NULL, outputId ="qua3_colunas")),
+                       fluidRow(valueBoxOutput(width = NULL, outputId ="desvio_colunas"))
+                ),
+                
+                
+                column(width = 10,
+                       fluidRow(
+                           box(width = 9, height = 350, solidHeader = T, status = "warning",
+                               plotOutput("histograma_colunas",height = 320)),
+                           box(width = 3,height = 350, solidHeader = T,  status = "warning",
+                               plotOutput("boxplot_colunas", height = 320))
+                       ),
+                       
+                       fluidRow(
+                           box(width = 6, height = 350, solidHeader = T, status = "warning",
+                               plotOutput("boxplot_colunas_anos",height = 320)),
+                           box(width = 6, height = 350, solidHeader = T, background = "purple", status = "warning",
+                               selectInput(inputId = "ano_escolhido2", label = "Selecione um ano: \n  ",
+                                           choices = 2000:2015, selected = 2015),
+                               plotOutput("reta_colunas", height = 250)
+                           )
+                       )),
+                fluidRow("")
+                
+                
+        )
+    ))
+
+
+
+
+
+
+# Put them together into a dashboardPage
+
+ui = dashboardPage(
+    dashboardHeader(title = "Expectativa de vida",
+                    dropdownMenu(type = "messages",
+                                 messageItem(from = "Alice Ferreira",
+                                             message = "Ola usuario!"))),
+    sidebar,
+    body
+)
+
+
+
+
+server <- function(input, output) {
+    output$texto_1 = renderText({texto1})
+    output$texto_2 = renderText({texto2})
+    
+    output$plot1 = renderPlot({
+        escolhido = input$ano_escolhido
+        mapa_central(escolhido)
+    })
+    
+    output$plot2 = renderPlot({
+        escolhido = input$ano_escolhido
+        grafico_boxplot(escolhido)
+    })
+    
+    output$media_expectativa = renderValueBox({
+        dados2 = data.frame(dados)
+        dados2 = as.vector(dados2[dados2$Year == input$ano_escolhido, 4])
+        valueBox(round(mean(dados2, na.rm = T),1), 
+                 paste("Expectattiva de vida media em",input$ano_escolhido),
+                 icon = icon("hand-holding-heart"), color = "light-blue")})
+    
+    output$media_IMC = renderValueBox({
+        dados2 = data.frame(dados)
+        dados2 = as.vector(dados2[dados2$Year == input$ano_escolhido, 11])
+        
+        valueBox(round(mean(dados2, na.rm = T),1),
+                 paste("Indicie de massa coporal medio",input$ano_escolhido),
+                 icon = icon("balance-scale-left"),color = "aqua")})
+    
+    
+    output$media_mortalidade_infantil = renderValueBox({
+        dados2 = data.frame(dados)
+        dados2 = as.vector(dados2[dados2$Year == input$ano_escolhido, 6])
+        valueBox(round(mean(dados2, na.rm = T),1), 
+                 paste("Mortalidade infantil media em",input$ano_escolhido),
+                 icon = icon("baby-carriage"), color = "light-blue")})
+    
+    
+    output$media_gasto_na_saude = renderValueBox({
+        dados2 = data.frame(dados)
+        dados2 = as.vector(dados2[dados2$Year == input$ano_escolhido, 14])
+        valor = paste(round(mean(dados2, na.rm = T),1), "%")
+        valueBox( valor, 
+                  paste("Porcentagem gasta na saude em",input$ano_escolhido), 
+                  icon = icon("dollar-sign"),color = "aqua")})
+    
+    
+    output$media_escolaridade = renderValueBox({
+        dados2 = data.frame(dados)
+        dados2 = as.vector(dados2[dados2$Year == input$ano_escolhido, 22])
+        valueBox(round(mean(dados2, na.rm = T),1),
+                 paste("Grau de escolaridade medio em",input$ano_escolhido), 
+                 icon = icon("graduation-cap"), color = "light-blue")})
+    
+    output$qua1_colunas = renderValueBox({
+        valor = valor_caixas_colunas(input$var_cont_3,2)
+        valueBox(valor, "Primeiro Quartil", icon = icon("ruler"), color = "yellow")
+    })
+    
+    output$qua3_colunas = renderValueBox({
+        valor = valor_caixas_colunas(input$var_cont_3,5)
+        valueBox(valor, "Terceiro Quartil", icon = icon("ruler-horizontal"), color = "purple")
+    })
+    
+    output$media_colunas = renderValueBox({
+        valor = valor_caixas_colunas(input$var_cont_3,4)
+        valueBox(valor, "Media", icon = icon("ruler-vertical"), color = "purple")
+    })
+    
+    output$mediana_colunas = renderValueBox({
+        valor = valor_caixas_colunas(input$var_cont_3,3)
+        valueBox(valor, "Mediana", icon = icon("ruler-combined"), color = "yellow")
+    })
+    
+    output$desvio_colunas = renderValueBox({
+        valor = valor_caixas_colunas(input$var_cont_3,100)
+        valueBox(valor, "Desvio padrao", icon = icon("pencil-ruler"), color = "yellow")
+        
+    })
+    
+    
+    output$hist = renderPlot({grafico_histograma(input$var_cont, input$slider)})
+    output$pontos = renderPlot({grafico_dispersao(input$var_cont)})
+    output$resumo_reg = renderPrint({sumary(modelo_completo)})
+    output$treemap = renderPlot({grafico_arvora()})
+    
+    
+    output$R2_antes = renderValueBox({
+        valueBox( round(resuminho_completo$r.squared,3),
+                  "R2 ajustado com todas as 19 variaveis disponiveis",
+                  icon = icon("sad-cry"),color = "yellow")
+    })
+    
+    output$R2_depois = renderValueBox({
+        valueBox( round(resuminho_menor$r.squared,3),
+                  "R2 ajustado com apenas 10 variaveis significativas",
+                  icon = icon("smile-wink"),color = "orange")
+    })
+    
+    output$grafico_interativo = renderPlotly({grafico_tempo(input$decisao, input$var_cont_2)})
+    
+    output$temporal_letra_a = renderPlot({A_temporal})
+    output$temporal_letra_b= renderPlot({B_temporal})
+    output$temporal_letra_c = renderPlot({C_temporal})
+    
+    output$teste_normalidade_anos = renderPrint({normalidade_anos})
+    output$teste_normalidade_escolaridade = renderPrint({normalidade_escolaridade})
+    output$teste_entre_escolaridade_e_anos = renderPrint({teste1})
+    
+    output$teste_normalidade_anos2 = renderPrint({normalidade_anos2})
+    output$teste_normalidade_HIV = renderPrint({normalidade_HIV})
+    output$teste_entre_HIV_e_anos = renderPrint({teste2})
+    
+    output$teste_normalidade_anos3 = renderPrint({normalidade_anos3})
+    output$teste_normalidade_saude = renderPrint({normalidade_saude})
+    output$teste_entre_saude_e_anos = renderPrint({teste3})
+    
+    output$histograma_colunas = renderPlot({grafico_histograma_colunas(input$var_cont_3)})
+    output$boxplot_colunas = renderPlot({grafico_boxplot_colunas(input$var_cont_3)})
+    output$boxplot_colunas_anos = renderPlot({grafico_boxplot_colunas_ano(input$var_cont_3)})
+    output$reta_colunas = renderPlot({grafico_reta_colunas(input$var_cont_3, input$ano_escolhido2)})
+}
+
+shinyApp(ui = ui, server = server)
